@@ -1,0 +1,279 @@
+\documentclass[runningheads]{llncs}
+%
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{url}
+\usepackage{float}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,shadows,backgrounds,fit}
+%
+\setcounter{tocdepth}{3}
+\pagestyle{headings}
+\renewcommand{\baselinestretch}{0.955}
+\addtolength{\textfloatsep}{-8pt}
+\addtolength{\intextsep}{-6pt}
+\addtolength{\abovecaptionskip}{-4pt}
+\addtolength{\belowcaptionskip}{-4pt}
+%
+\begin{document}
+%
+\title{Multi Seasonal Short Term Electric Load Forecasting for the Great Britain National Grid: A Machine Learning Framework Combining Ensemble Tree Models and Seasonal Naive Baselines Using NESO Settlement Period Data}
+%
+\titlerunning{Multi seasonal STLF for the GB power grid}
+%
+\author{Tu Ngan\inst{1} \and
+Bao Han\inst{1} \and
+Kieu Nhi\inst{1} }
+%
+\authorrunning{Nhi et al.}
+\institute{FPT University, Ho Chi Minh City, Vietnam\\
+\email{tunganphamhoang@gmail.com},
+\small\texttt{donghan010106@gmail.com},
+\small\texttt{nhiklt2006@gmail.com}}
+\maketitle
+%
+\begin{abstract}
+Accurate short term electricity demand forecasting is a fundamental prerequisite for the secure and economically efficient operation of national transmission grids under expanding embedded renewable penetration. This study presents a forecasting framework for National Demand (ND) on the Great Britain transmission system using 30 minute settlement period data published by the National Energy System Operator (NESO), spanning 1 January 2020 to 31 December 2025. Through a leakage safe pipeline, six annual archives are consolidated into 105,216 raw half hourly records over 22 attributes, resynchronised across 12 daylight saving transition days, and enriched with autoregressive lag, rolling window, and cyclical calendar features, yielding a final matrix of 104,880 observations and 49 candidate predictors, all retained after a mutual information screening step. Six models are benchmarked on a strictly chronological 2025 holdout partition: two Seasonal Naive baselines (lag 48 and lag 336 settlement periods), Linear Regression, Random Forest, XGBoost, and LightGBM. The XGBoost Regressor is the champion model, reaching a MAPE of 0.99\% and $R^2$ of 0.9972, an RMSE reduction of about 87\% relative to the stronger SNaive Daily baseline. A set of six hypothesis driven experiments (H1a through H5) further shows that the intraday cyclical encoding contributes most among calendar feature groups, embedded renewable generation lags meaningfully improve the boosting models, and forecast accuracy at morning and evening peak periods degrades only marginally for the tree based models, demonstrating strong operational utility for grid balancing.
+\keywords{Short term load forecasting \and NESO \and Gradient boosting \and Seasonal Naive baseline \and Great Britain grid.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Reliable short term electricity demand forecasting underpins almost every operational decision made by a transmission system operator, from unit commitment and reserve procurement to the dispatch of power exchanges through interconnectors \cite{hyndman2018forecasting}. As power systems absorb a growing share of weather dependent embedded generation, the residual load that operators must actively balance becomes increasingly difficult to describe using classical statistical models alone \cite{taylor2012short,fan2012short}. This has renewed interest in data driven forecasting frameworks; the appropriate level of temporal aggregation for such forecasts is itself an active research question \cite{sevlian2018scaling}. This study addresses the problem at the nationwide aggregation level for Great Britain (GB).
+
+This paper studies Short Term Load Forecasting (STLF) using operational data at settlement period resolution published by the National Energy System Operator (NESO) \cite{neso2025historic}, the body responsible for real time electricity supply and demand balancing across England, Scotland, and Wales. The forecasting target is National Demand (ND), defined by NESO as total GB generation after subtracting station load, pumped storage pumping demand, and exports through international interconnectors. The dataset is consolidated from six heterogeneous annual source files (2020 through 2025) into a single cleaned series containing 105,216 half hourly observations over 22 attributes, continuously covering 1 January 2020 to 31 December 2025.
+
+Exploratory analysis shows that ND exhibits clear nested seasonality across three time scales: intraday cycles, weekly cycles separating working days from weekends, and annual cycles reflecting winter heating demand. Augmented Dickey Fuller tests reject the unit root null hypothesis for the raw ND series, so the series is statistically stationary in level even though it carries pronounced daily, weekly, and annual seasonality; first differencing the series only sharpens this conclusion. This coexistence of formal stationarity with strong periodic structure is exactly what motivates a feature engineering strategy built around explicit seasonal lags rather than differencing, as detailed in Section~\ref{sec:methodology}.
+
+The forecasting problem is formulated at native half hourly resolution: with information available up to settlement period $t-1$, the model predicts National Demand at period $t$. To avoid recursive error accumulation, which arises when a model feeds its own earlier forecast back in as an input for a later step, the feature set is built exclusively from settled historical values, so that the same set of predictors is available and computable at forecast origin for every period independently:
+\begin{equation}
+\hat{y}_{t} = f\big(\mathbf{x}_{t}\big), \qquad \mathbf{x}_{t} = \big[\, \text{lag features}_{\{1,2,12,24,36,48,336\}},\; \text{rolling stats}_{\{8,24,48\}},\; \text{cyclical calendar terms} \,\big],
+\label{eq:direct_forecast}
+\end{equation}
+where the lag features reach back one settlement period, half a day, a full day, and a full week (336 periods), and the rolling statistics summarise the recent trajectory of demand over eight, twenty four, and forty eight preceding periods. Under this formulation, any accuracy difference across settlement periods must come from the differing predictive relevance of the lagged and rolling context at that time of day, rather than from compounding forecast errors.
+
+This work makes three contributions. First, we construct an auditable data consolidation pipeline from six heterogeneous annual NESO archives, resolving daylight saving transition anomalies and structural column inconsistencies without distortion. Second, we present a leakage safe autoregressive and cyclical feature engineering pipeline, validated end to end by a mutual information screening step computed only on the pre 2025 partition. Third, we provide a homogeneous six model benchmark, statistical baselines, a linear model, and three tree ensembles, on an identical chronological holdout set, together with a hyperparameter tuning experiment and a six hypothesis statistical validation study.
+
+The remainder of this paper is structured as follows. Section 2 outlines related work in short term load forecasting. Section 3 describes the proposed methodology and feature extraction pipeline. Section 4 specifies the experimental setup. Section 5 analyzes the empirical findings and hypothesis tests, and Section 6 concludes the work.
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Statistical and Tree Based Methods in Load Forecasting}
+
+Classical STLF approaches based on exponential smoothing, seasonal ARIMA, and semi parametric additive structures have historically formed the foundation of demand projection due to their transparency and ease of deployment, demonstrating high efficacy on aggregated regional curves by directly mapping fixed calendar seasonalities and baseline trends. However, their linear formulations scale poorly under the nonlinear volatility injected by distributed renewable generation.
+
+Contemporary research has therefore transitioned toward supervised machine learning. Random Forest \cite{breiman2001random}, an ensemble of decorrelated regression trees trained by bootstrap aggregation, offers a robust nonlinear baseline that is comparatively simple to tune. Gradient boosted decision tree ensembles such as XGBoost \cite{chen2016xgboost} and LightGBM \cite{ke2017lightgbm} have achieved further prominence for their capacity to isolate high order nonlinear interactions across mixed tabular matrices without complex scaling transformations, at the cost of a larger hyperparameter surface. While these tree based models have been widely deployed across industrial grids, the literature remains comparatively thin on controlled, same feature set comparisons between a bagging ensemble (Random Forest) and two structurally different boosting implementations (XGBoost's depth wise trees against LightGBM's leaf wise growth) under one shared autoregressive feature pipeline. We directly address this gap by training all three ensembles, plus a linear baseline and two Seasonal Naive references, on one identical feature matrix.
+
+\subsection{Feature Engineering and Interpretability for Tabular Load Forecasting}
+
+Autoregressive lag features and rolling window summary statistics remain the predictive backbone of tabular load forecasting pipelines, since they encode same time yesterday and same time last week references that classical seasonal naive models already exploit implicitly. Cyclical sine and cosine encodings of settlement period and day of week are a standard remedy for the artificial numerical distance that plain integer calendar indices introduce at period boundaries.
+
+Feature screening based on mutual information, an information theoretic dependency measure estimated here with a k nearest neighbour estimator \cite{kraskov2004estimating}, offers a model agnostic way to audit a large autoregressive candidate set before training, complementing post hoc, retrain based ablation studies that isolate the marginal contribution of a specific feature group by removing it and measuring the resulting change in error. Compared with model internal feature importance scores, which can be biased toward high cardinality or highly correlated lag features, retrain based ablation gives a more direct, causal style estimate of a feature group's contribution and is the interpretability strategy adopted in this study.
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Problem Formulation and Leakage Safe Autoregressive Framework}
+
+The proposed STLF framework targets National Demand at the native 30 minute settlement period resolution rather than at a coarser daily aggregation, so as to preserve the full diurnal shape of the demand curve for both training and evaluation. Because every predictor is constructed exclusively from settled historical observations, the same feature construction rule applies uniformly to every settlement period in the dataset, and no period's forecast depends on another period's own prior forecast. Table~\ref{tab:core_notation} formalises the core notation used throughout the pipeline.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{pipeline.png}
+\caption{Proposed multi seasonal STLF pipeline: NESO archive consolidation, cleaning and DST resynchronisation, exploratory signal analysis, feature engineering, chronological data splitting, and the six benchmarked forecasting models.}
+\label{fig:methodology_pipeline}
+\end{figure}
+
+
+\begin{table}[H]
+\centering
+\caption{Core notation and structural definitions of the forecasting framework.}
+\label{tab:core_notation}
+\begin{tabular}{ll}
+\toprule
+\textbf{Notation} & \textbf{Operational Definition and Structural Dimension} \\
+\midrule
+$t$ & Index of a settlement period observation on the continuous 30 minute grid \\
+$y_t$ & True National Demand at period $t$, a scalar target, $y_t \in \mathbb{R}$ \\
+$\hat{y}_t$ & Forecast of National Demand at period $t$ \\
+$\mathbf{x}_t$ & Engineered feature vector for period $t$, where $\mathbf{x}_t \in \mathbb{R}^{49}$ \\
+$L$ & Short term lag depths in settlement periods, $L = \{1,2,12,24,36,48\}$ \\
+$H$ & Weekly seasonal lag depth, $H = 336$ settlement periods (seven days) \\
+$W$ & Rolling window widths in settlement periods, $W = \{8,24,48\}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+The pipeline follows the synchronised flow of data consolidation, exploratory signal analysis, feature extraction, chronological splitting, and competitive modeling illustrated in Figure~\ref{fig:methodology_pipeline}. Each row of the resulting matrix corresponds to one settlement period, described by 49 engineered candidate features. Under this formulation, any localised increase in forecast error at a particular time of day reflects a decline in the physical relevance of the historical lag and rolling context at that period, rather than compounding model feedback.
+
+\subsection{Leakage Safe Feature Engineering Pipeline}
+
+The feature engineering layer is designed to expose complex periodic cycles to downstream estimators while maintaining strict chronological isolation. Seven lag depths, $\{1,2,12,24,36,48,336\}$ settlement periods, are computed for each of the three raw demand series (ND, TSD, and ENGLAND\_WALES\_DEMAND), producing 21 lag columns; the shortest lags (one and two periods) capture immediate persistence, the midrange lags (twelve, twenty four, thirty six, forty eight periods) span six hours to a full day, and the 336 period lag reaches back exactly one week. Rolling mean and rolling standard deviation of ND over windows of eight, twenty four, and forty eight periods are appended, together with a rolling mean of embedded solar generation over the same three windows; every rolling computation is shifted one period backward before the window is applied, so that a feature available at period $t$ only ever uses information observed up to period $t-1$.
+
+Temporal boundaries are further reinforced through cyclical calendar encodings. Standard integer indices for cyclical attributes such as settlement period or day of week introduce artificial numerical distance between adjacent periods (for example, placing period 48 and period 1 of the following day at maximum separation); to preserve continuity, settlement period is mapped into a sine and cosine pair over its 48 period cycle (PERIOD\_SIN, PERIOD\_COS), and day of week is mapped into a corresponding sine and cosine pair over its seven day cycle (DOW\_SIN, DOW\_COS). A binary weekend indicator (IS\_WEEKEND) completes this deterministic set.
+
+Lag and rolling operators applied up to $H=336$ periods necessarily leave the first 336 rows of the timeline without complete historical context; these rows are trimmed, together with three purely administrative columns (settlement date, the intermediate day of week integer, and the source file year) that cannot be vectorised directly. The resulting structurally complete matrix contains 104,880 rows and 52 columns, of which three are the retained demand series and 49 are candidate predictors. Because constructing 21 lag columns, 6 rolling columns, and 5 cyclical or flag columns simultaneously risks redundant or low value predictors, all 49 candidate columns are screened with a mutual information filter against ND, computed on a random sample of 15,000 observations drawn only from the 2020 through 2024 partition so that the sealed 2025 test period never influences feature selection. The highest scoring predictors are the one period lag of ND, the one period lag of ENGLAND\_WALES\_DEMAND, and the one period lag of TSD, followed by the two period lags of the same series and the daily and weekly lags of ND; the lowest scoring predictors are the interconnector flow columns, embedded wind generation, DOW\_SIN, and the weekend flag. All 49 features are retained for training, since even the lowest ranked columns still contribute nonzero information and none were found to be pure noise.
+
+\subsection{Competitive Modeling Families}
+
+The downstream modeling tier evaluates six estimators trained on the identical 49 feature matrix, deliberately spanning a spectrum from nonparametric baselines to tuned tree ensembles. The baseline family establishes an operational floor through two Seasonal Naive benchmarks, SNaive Daily, which simply repeats the value observed 48 periods earlier ($\hat{y}_t = y_{t-48}$), and SNaive Weekly, which repeats the value observed 336 periods earlier ($\hat{y}_t = y_{t-336}$); neither has any parameter to estimate. Linear Regression is trained as an ordinary least squares model directly on the full 49 feature matrix, giving a simple parametric reference between the naive baselines and the nonlinear ensembles.
+
+Three tree based ensembles complete the comparison. Random Forest \cite{breiman2001random} is configured with 50 trees and a maximum depth of 12, averaging independently bootstrapped, decorrelated trees. XGBoost \cite{chen2016xgboost} grows depth wise trees under a squared error objective with regularised leaf weights. LightGBM \cite{ke2017lightgbm} instead grows leaf wise trees, typically converging with fewer total splits for a comparable error budget. To determine whether either boosting implementation benefits from hyperparameter tuning beyond its default configuration, XGBoost and LightGBM are each retuned through a three fold expanding window walk forward random search over three candidate combinations of tree depth or number of leaves, learning rate, number of estimators, subsample ratio, column subsample ratio, and L1 and L2 regularisation strength, all evaluated only within the training timeline so the 2025 test partition remains untouched during tuning.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Data Collection and Study Area}
+
+The empirical evaluation of the proposed multi seasonal forecasting framework is conducted on operational electricity transmission telemetry from the Great Britain national grid. The study area encompasses the interconnected onshore transmission systems of England, Scotland, and Wales, centrally balanced by the National Energy System Operator (NESO). The observation period covers an uninterrupted timeline from 1 January 2020 to 31 December 2025, capturing six full calendar years including the demand disruption associated with the COVID 19 period and its subsequent recovery. The raw data repository comprises six distinct annual settlement period archives published by the system operator. This 30 minute granularity data channel yields 48 settlement periods per regular calendar day and a raw database of 105,216 individual chronological records over 22 attributes.
+
+The primary predictive target is National Demand (ND). Within the NESO balancing framework, National Demand represents the aggregate net electricity requirement across the three integrated nations, defined as total metered generation from transmission connected power stations plus net interconnector imports, while excluding generating station internal consumption, pumped storage pumping demand, and interconnector exports. This attribute serves as the critical grid synchronisation metric because it measures the baseline residual load that must be continuously matched by large scale synchronised generation assets.
+
+\subsection{Data Preprocessing, Feature Engineering, and Partitioning}
+\label{sec:featureeng}
+Consolidating six heterogeneous annual data files into an auditable, continuous pipeline requires resolving distinct structural discrepancies. Notably, the SCOTTISH\_TRANSFER column, which records the power exchange across the Scotland to England and Wales boundary, is only published from 2023 onward; it is therefore entirely absent, a structurally missing 52,608 rows, in the three earliest annual files (2020 through 2022) and is dropped from the cleaned matrix rather than imputed. A further preprocessing step handles the temporal anomalies introduced by British summer time transitions. Twelve settlement dates across the six years, one spring and one autumn transition per year, do not contain exactly 48 periods: the spring transition skips one clock hour, reducing the day to 46 periods, while the autumn transition repeats one clock hour, extending the day to 50 periods. Each such day is resynchronised by interpolating every numeric column over a normalised relative time axis (running from zero to one across the day) back onto the standard 48 period grid, so that every calendar day in the cleaned matrix contains exactly 48 uniformly spaced observations. The same linear interpolation procedure is also used to repair any residual missing or physically impossible values, defined as demand readings at or below zero MW. This cleaning stage yields a perfectly complete matrix of 105,216 rows, which is exported before feature engineering begins.
+
+The chronological partitioning strategy enforces a strict out of time evaluation protocol to replicate realistic operational conditions and eliminate future data leakage. After the 336 leading rows required for the weekly lag are trimmed, the final feature matrix of 104,880 rows is split sequentially into a training partition covering 2020 through 2023 (69,792 rows), a validation partition covering 2024 (17,568 rows), and a held out test partition covering the full 2025 calendar year (17,520 rows), which is never touched during feature selection or hyperparameter tuning. To optimise hyperparameters for XGBoost and LightGBM without ever benchmarking against the test partition, a three fold expanding window walk forward validation structure is implemented entirely within the training plus validation timeline (87,360 rows), the standard time series analogue of cross validation that respects temporal ordering \cite{hyndman2018forecasting}.
+
+\subsection{Exploratory Data Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{mstl_decomposition.png}
+\caption{Multi seasonal decomposition of National Demand (ND) over a representative two week window, showing the raw series, the underlying trend, the weekly seasonal component, and the annual seasonal component, illustrating the nested seasonality that motivates the lag 48 and lag 336 feature design.}
+\label{fig:mstl}
+\end{figure}
+
+A systematic exploratory audit of the consolidated dataset reveals complex, multi layered seasonal periodicities that directly dictate the structural design of the downstream forecasting models. Applying seasonal trend decomposition to ND highlights three nested periodic layers: a prominent intraday shape governed by synchronised domestic and commercial behaviour, an intraweek cycle driven by industrial activity scaling down on weekends, and an annual macroeconomic curve dictated by climate driven heating demand. The geometric behaviour of these isolated components is quantified in Figure~\ref{fig:mstl}. Autocorrelation analysis over short lags confirms strong intraday periodicity, while the partial autocorrelation function isolates the one day lag as the single dominant direct predictor once shorter lags are accounted for; extending the autocorrelation window to two weeks further highlights a secondary but clearly visible peak at the seven day mark, directly supporting the choice of a 336 period weekly lag alongside the 48 period daily lag.
+
+The statistical characteristics of the demand series confirm that, although Augmented Dickey Fuller tests already reject a unit root for the raw level series, computing seasonal averages still reveals substantial structure: mean ND is 31,413.86 MW in winter, 27,005.17 MW in autumn, 25,749.88 MW in spring, and 23,004.25 MW in summer, a monotonic seasonal ordering without a distinct summer peak, consistent with a demand profile dominated by winter heating rather than summer cooling load. Weekday demand averages 27,661.75 MW against 24,492.82 MW on weekends, a gap of roughly 11.5\%. The feature dependency analysis further indicates severe multicollinearity among the primary grid demand metrics: ND correlates almost perfectly with TSD and with England and Wales demand, so contemporaneous values of these auxiliary series are excluded from the feature matrix and only their lagged history is retained as predictive input, avoiding both leakage and multicollinearity while still exploiting their informative co movement with ND.
+
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Aggregate Performance Evaluation}
+\label{sec:evaluation}
+
+Before pitting all six candidates against each other, it is worth asking a narrower question first (H1a): between the two parameter free references themselves, is a same time yesterday memory or a same time last week memory the better naive forecast? The answer turns out to depend heavily on the day of week. On ordinary weekdays, SNaive Daily, which simply reuses the value observed at the same settlement period one day earlier, is clearly the stronger of the two, with a weekday MAE of 1,762.01 MW against 2,219.62 MW for SNaive Weekly, a gap of roughly 20\%. That advantage all but disappears at the weekend: SNaive Daily's weekend MAE of 2,069.65 MW is barely different from SNaive Weekly's 2,072.52 MW, a gap of under three megawatts, since the 336 period lag lands exactly one week earlier on the same weekday and so naturally reuses a Saturday to describe a Saturday, whereas the 48 period lag instead compares a weekend day to the ordinary weekday immediately before it and loses its advantage as a result. Neither naive baseline is therefore uniformly better: SNaive Daily is the stronger reference overall, especially through the working week, while SNaive Weekly closes the gap almost completely once the target day falls on a weekend.
+
+With that baseline picture established, all six models are evaluated on the same held out 2025 test partition of 17,520 settlement periods, pooled into MAE, RMSE, MAPE, and $R^2$. Table~\ref{tab:benchmark} reports the single split results, sorted by RMSE.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Aggregate benchmark performance on the 2025 test partition (17,520 settlement periods). The best value in each column is bolded.}
+\label{tab:benchmark}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{MAE (MW)} & \textbf{RMSE (MW)} & \textbf{MAPE (\%)} & \textbf{$R^2$} \\
+\midrule
+XGBoost Regressor       & \textbf{247.21} & \textbf{325.48} & \textbf{0.9902} & \textbf{0.9972} \\
+LightGBM Regressor      & 256.84 & 336.72 & 1.0313 & 0.9970 \\
+Random Forest Regressor & 286.74 & 373.29 & 1.1363 & 0.9963 \\
+Linear Regression       & 339.93 & 444.66 & 1.3489 & 0.9948 \\
+SNaive Daily            & 1849.66 & 2577.20 & 7.3703 & 0.8257 \\
+SNaive Weekly           & 2177.71 & 2918.89 & 8.4360 & 0.7764 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{model_comparison.png}
+\caption{Aggregate $R^2$, MAE, RMSE, and MAPE of Random Forest, XGBoost, and LightGBM against the two Seasonal Naive baselines and Linear Regression on the 2025 test partition.}
+\label{fig:modelcomparison}
+\end{figure}
+
+This immediately settles the broader question of whether any learned model is worth the extra complexity over a naive reference (H1b): all four machine learning models clearly outperform both Seasonal Naive baselines on every metric (Figure~\ref{fig:modelcomparison}). Even the weakest machine learning model, Linear Regression, cuts RMSE by about 83\% relative to the stronger SNaive Daily baseline, while XGBoost, the champion model, cuts RMSE by nearly 87\%. In terms of $R^2$, the two baselines only reach 0.776 to 0.826, while all four machine learning models exceed 0.994, confirming that lag, rolling statistic, and cyclical calendar features carry substantially more predictive information than a simple deterministic repetition of a past value. Among the tree ensembles, XGBoost is the strongest model overall (MAPE 0.99\%), narrowly ahead of LightGBM (MAPE 1.03\%) and more clearly ahead of Random Forest (MAPE 1.14\%), suggesting that sequential boosting exploits the engineered feature set somewhat more effectively than either bagging or a single joint linear fit. A separate hyperparameter tuning experiment retunes XGBoost and LightGBM through a three fold expanding window random search; on the 2025 test set, the tuned models (MAPE 1.05\% and 1.02\% respectively) are marginally weaker than their default configurations, indicating that, at only three random search draws per model, the tuning budget used here is too small to reliably beat well chosen library defaults on this feature set.
+
+\subsection{Error Diagnostics and Business Interpretation}
+\label{sec:horizon}
+
+
+
+To translate the aggregate error figures into an operationally meaningful diagnosis, the champion XGBoost model's daily aggregated forecast is compared against actual ND, and the residual error series is examined across the 2025 test year: the mean signed error is only negative 5.55 MW, essentially unbiased, with a standard deviation of 325.44 MW and an average predicted to actual ratio of 1.000725, confirming the model neither systematically over nor under forecasts total annual demand. Summed over the full year, XGBoost projects a total 2025 demand of 229,279,520 MWh, close to the true annual total. Monthly MAPE for XGBoost ranges from about 0.74\% in the best month to a higher but still small value in the most volatile month, well within the tolerance required for reserve margin planning.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{peak_period_impact.png}
+\caption{Global MAPE against MAPE restricted to morning (07:00 to 09:00) and evening (17:00 to 19:00) peak settlement periods, for all six models on the 2025 test partition.}
+\label{fig:horizon}
+\end{figure}
+
+This raises a natural follow up question (H5): does accuracy hold up specifically during the morning and evening periods that matter most for grid balancing, or only on average across the day? Morning (settlement periods 15 to 18, approximately 07:00 to 09:00) and evening (periods 35 to 38, approximately 17:00 to 19:00) peak windows together account for 2,920 of the 17,520 test periods, about 16.7\%. Figure~\ref{fig:horizon} shows that the two Seasonal Naive baselines behave inconsistently at peak periods: SNaive Daily degrades from 7.37\% to 8.08\% global to peak MAPE, while SNaive Weekly actually improves from 8.44\% to 7.42\%, since the seven day lag captures the recurring weekly rhythm of peak demand more faithfully than the one day lag does across a weekday to weekend boundary. All four machine learning models degrade only marginally at peak periods: Linear Regression by 0.10 percentage points, Random Forest by 0.13 points, XGBoost by only 0.02 points (0.99\% to 1.02\%), and LightGBM by only 0.01 points (1.03\% to 1.04\%). XGBoost and LightGBM are therefore the most stable models specifically at the highest stakes settlement periods for grid balancing, a property more operationally relevant than aggregate accuracy alone.
+
+\subsection{Feature Group Ablation and Seasonal Effects}
+\label{sec:explainability}
+
+A separate question is which engineered feature groups the tree ensembles actually rely on, and in particular whether the intraday cyclical encoding matters more than the other calendar signals (H2). Rather than a post hoc attribution method such as SHAP, feature importance is established here through direct retrain based ablation: each tree ensemble is retrained after removing one calendar feature group at a time, and the resulting change in MAE quantifies that group's marginal contribution.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{feature_ablation.png}
+\caption{Percentage increase in MAE for Random Forest, XGBoost, and LightGBM after removing, in turn, the intraday cyclical encoding (PERIOD\_SIN/PERIOD\_COS), the day of week cyclical encoding (DOW\_SIN), and the binary weekend flag (IS\_WEEKEND), relative to the full 49 feature configuration.}
+\label{fig:ablation}
+\end{figure}
+
+Figure~\ref{fig:ablation} shows that, among the three calendar feature groups tested, the intraday cyclical encoding has the strongest and most consistent effect: removing it increases MAE by 3.55\% for Random Forest, 3.02\% for LightGBM, and 1.84\% for XGBoost. The day of week encoding ranks second, most visible in LightGBM (a 4.24\% increase) and XGBoost (2.12\%), but is nearly inert for Random Forest (0.09\%). The binary weekend flag contributes least of all, and its removal even slightly lowers Random Forest's MAE (by 0.06\%), most likely because weekend information is already captured indirectly through the weekly lag and the day of week encoding, leaving the flag redundant and mildly noisy for at least one tree model. A closely related question is whether the embedded wind and solar signals earn their place in the feature set at all (H4). A parallel ablation of the seven embedded renewable columns (embedded solar capacity and generation, embedded wind capacity and generation, and the three rolling solar means) shows that XGBoost is the most sensitive of the three ensembles to their removal, with MAE rising 5.65\% (from 247.41 to 261.40 MW), against 4.82\% for LightGBM and only 1.58\% for Random Forest, indicating that the sequential boosting mechanism extracts more signal from the embedded renewable proxies than the simple averaging mechanism underlying Random Forest.
+
+The last diagnostic question is whether these accuracy patterns simply mirror the underlying seasonal and weekday structure of demand itself (H3). Consistent with the seasonal averages reported in Section~\ref{sec:setup}, where winter demand exceeds autumn, which exceeds spring, which exceeds summer, with no distinct summer peak, model error itself also varies by season: the gap between the best and worst performing model's MAE is widest in autumn (122.34 MW) and winter (107.45 MW), narrower in spring (67.21 MW) and summer (73.74 MW), showing that the shoulder seasons, where demand transitions most rapidly, are comparatively harder for Linear Regression than for the tree ensembles. XGBoost records the lowest MAE in every seasonal group (235.32 to 256.77 MW), while Linear Regression is consistently the weakest, particularly in autumn, confirming that the tree ensembles capture the joint seasonal and weekday interaction in demand noticeably better than a single global linear fit.
+
+\subsection{Summary and Model Selection Guidance}
+\label{sec:guidance}
+
+Synthesising Sections~\ref{sec:evaluation} through \ref{sec:explainability}, XGBoost is the clear overall choice when aggregate accuracy is the sole criterion, with the lowest MAE, RMSE, and MAPE and the highest $R^2$ among all six models, and it is also the most stable model at morning and evening peak periods. LightGBM is a close second and remains an attractive alternative given its typically lower training cost from leaf wise growth. Random Forest, while clearly better than the naive baselines and Linear Regression, trails both boosting implementations on every metric, suggesting that sequential error correction offers a genuine advantage over bootstrap averaging on this feature set. Linear Regression is a useful, cheap intermediate reference but is not competitive with any of the three ensembles. Between the two Seasonal Naive baselines, SNaive Daily is the stronger default reference overall, though SNaive Weekly should be preferred specifically for weekend and peak period robustness, since its 336 period lag captures the recurring weekly rhythm that the 48 period lag misses across a weekday to weekend boundary.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We developed a complete STLF pipeline for GB National Demand from 105,216 NESO settlement period records (2020 through 2025), with the three main contributions stated in Section~\ref{sec:intro}: an auditable data consolidation and DST resynchronisation pipeline, a leakage safe autoregressive and cyclical feature engineering pipeline validated by mutual information screening, and a homogeneous six model benchmark (XGBoost achieving MAPE 0.99\%, $R^2$ 0.9972, an RMSE reduction of about 87\% over the strongest baseline), together with a six hypothesis statistical validation study confirming that neither naive baseline dominates the other across all days, and that intraday cyclical encoding, embedded renewable lags, and seasonal or weekday effects each carry distinct, measurable predictive value.
+
+The most important limitation is the absence of true meteorological covariates: lagged embedded wind and solar generation serve only as indirect, one period lagged proxies for weather conditions rather than direct forecasts of temperature, wind speed, or irradiance. Consequently, the highest priority extension of this research involves integrating genuine meteorological forecast inputs directly into the feature matrix \cite{hong2016probabilistic}, together with a larger hyperparameter search budget for XGBoost and LightGBM, explicit peak period specialised features for the morning and evening ramps, and a probabilistic, quantile based reformulation of the regression target to provide grid operators with calibrated confidence intervals rather than point forecasts alone. Such risk aware forecasts would help reduce reliance on expensive fossil fuel peaking plants, supporting the secure integration of accelerating distributed renewable penetration into the net zero energy transition.
+
+\begin{thebibliography}{12}
+
+\bibitem{hong2016probabilistic}
+Hong, T., Fan, S.: Probabilistic electric load forecasting: a tutorial review. Int.\ J. Forecast. \textbf{32}(3), 914 to 938 (2016)
+
+\bibitem{hyndman2018forecasting}
+Hyndman, R.J., Athanasopoulos, G.: Forecasting: Principles and Practice, 2nd edn. OTexts, Melbourne (2018)
+
+\bibitem{taylor2012short}
+Taylor, J.W.: Short term load forecasting with exponentially weighted methods. IEEE Trans.\ Power Syst.\ \textbf{27}(1), 458 to 464 (2012)
+
+\bibitem{fan2012short}
+Fan, S., Hyndman, R.J.: Short term load forecasting based on a semi parametric additive model. IEEE Trans.\ Power Syst.\ \textbf{27}(1), 134 to 141 (2012)
+
+\bibitem{sevlian2018scaling}
+Sevlian, R., Rajagopal, R.: A scaling law for short term load forecasting on varying levels of aggregation. Int.\ J. Electr.\ Power Energy Syst.\ \textbf{98}, 350 to 361 (2018)
+
+\bibitem{ke2017lightgbm}
+Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., Liu, T.Y.: {LightGBM}: a highly efficient gradient boosting decision tree. In: NeurIPS 30, pp.\ 3146 to 3154 (2017)
+
+\bibitem{chen2016xgboost}
+Chen, T., Guestrin, C.: {XGBoost}: a scalable tree boosting system. In: KDD 2016, pp.\ 785 to 794 (2016)
+
+\bibitem{breiman2001random}
+Breiman, L.: Random forests. Mach.\ Learn.\ \textbf{45}(1), 5 to 32 (2001)
+
+\bibitem{kraskov2004estimating}
+Kraskov, A., St{\"o}gbauer, H., Grassberger, P.: Estimating mutual information. Phys.\ Rev.\ E \textbf{69}(6), 066138 (2004)
+
+\bibitem{pedregosa2011scikit}
+Pedregosa, F., Varoquaux, G., Gramfort, A., et al.: Scikit learn: machine learning in Python. J. Mach.\ Learn.\ Res.\ \textbf{12}, 2825 to 2830 (2011)
+
+\bibitem{neso2025historic}
+National Energy System Operator (NESO): Historic Demand Data. \url{https://www.neso.energy/data-portal/historic-demand-data} (accessed Jun 2026)
+
+\end{thebibliography}
+
+\end{document}

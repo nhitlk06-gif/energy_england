@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Large regenerable intermediate data (regenerate via `make clean features`)
+# Trained models under models/ ARE tracked so the app works out of the box.
+data/processed/*.csv
+!data/processed/.gitkeep
+
+# Streamlit
+.streamlit/
