@@ -26,7 +26,7 @@ Thumbs.db
 
 # Large regenerable intermediate data (regenerate via `make clean features`)
 # Trained models under models/ ARE tracked so the app works out of the box.
-data/processed/*.csv
+
 !data/processed/.gitkeep
 
 # Streamlit
