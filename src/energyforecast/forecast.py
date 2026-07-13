@@ -155,6 +155,20 @@ def forecast_horizon(
 
         new_row = {col: yhat for col in config.TARGET_COLUMNS}
         new_row["SETTLEMENT_PERIOD"] = feature_row.get("SETTLEMENT_PERIOD")
+
+        # Carry forward exogenous (non-target) raw columns too, or later
+        # rolling/lag windows will slide into NaN-filled predicted rows.
+        # Approximate with same-period-yesterday persistence, falling back
+        # to the last known observation.
+        for col in working_history.columns:
+            if col in new_row:
+                continue
+            series = working_history[col]
+            if len(series) >= config.STANDARD_PERIODS_PER_DAY:
+                new_row[col] = series.iloc[-config.STANDARD_PERIODS_PER_DAY]
+            else:
+                new_row[col] = series.iloc[-1]
+
         working_history.loc[next_time] = pd.Series(new_row)
 
     result = pd.DataFrame(predictions, columns=["datetime", "forecast_mw"]).set_index("datetime")
