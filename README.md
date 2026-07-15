@@ -20,8 +20,8 @@ plus a runnable **FastAPI** forecasting service and a **Streamlit** dashboard.
 | LightGBM Regressor | 0.9970 | 256.8 | 336.7 | 1.03 |
 | Random Forest Regressor | 0.9963 | 286.8 | 373.4 | 1.14 |
 | Linear Regression | 0.9948 | 339.9 | 444.7 | 1.35 |
-| SNaive Daily ($\hat{Y}_t = Y_{t-48}$) | 0.8257 | 1849.7 | 2577.2 | 7.37 |
-| SNaive Weekly ($\hat{Y}_t = Y_{t-336}$) | 0.7764 | 2177.7 | 2918.9 | 8.44 |
+| SNaive Daily | 0.8257 | 1849.7 | 2577.2 | 7.37 |
+| SNaive Weekly | 0.7764 | 2177.7 | 2918.9 | 8.44 |
 
 XGBoost is the best model on every metric and is used by default by the API
 and dashboard.
